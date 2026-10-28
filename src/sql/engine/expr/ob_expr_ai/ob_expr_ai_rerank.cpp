@@ -29,6 +29,67 @@ namespace oceanbase
 namespace sql 
 {
 
+// A rerank score is a number, but providers may serialize it as an integer, as a
+// float or as an unsigned value, so read any numeric node instead of assuming
+// J_DOUBLE. Returns OB_ERR_UNEXPECTED for anything else, which keeps a malformed
+// response from silently reordering the candidates.
+static int get_rerank_score(const ObJsonNode *node, double &score)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(node)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    switch (node->json_type()) {
+      case ObJsonNodeType::J_DOUBLE:
+        score = static_cast<const ObJsonDouble *>(node)->value();
+        break;
+      case ObJsonNodeType::J_INT:
+        score = static_cast<double>(static_cast<const ObJsonInt *>(node)->value());
+        break;
+      case ObJsonNodeType::J_UINT:
+        score = static_cast<double>(static_cast<const ObJsonUint *>(node)->value());
+        break;
+      default:
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("ai_rerank, score is not a number", K(ret), K(node->json_type()));
+        break;
+    }
+  }
+  return ret;
+}
+
+// The rank reported by a model is an integer in the range of the submitted batch.
+static int get_rerank_rank(const ObJsonNode *node, int64_t &rank)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(node)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    switch (node->json_type()) {
+      case ObJsonNodeType::J_INT:
+        rank = static_cast<const ObJsonInt *>(node)->value();
+        break;
+      case ObJsonNodeType::J_UINT:
+        rank = static_cast<int64_t>(static_cast<const ObJsonUint *>(node)->value());
+        break;
+      case ObJsonNodeType::J_DOUBLE: {
+        double value = static_cast<const ObJsonDouble *>(node)->value();
+        if (value < 0 || value != static_cast<double>(static_cast<int64_t>(value))) {
+          ret = OB_ERR_UNEXPECTED;
+        } else {
+          rank = static_cast<int64_t>(value);
+        }
+        break;
+      }
+      default:
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("ai_rerank, index is not an integer", K(ret), K(node->json_type()));
+        break;
+    }
+  }
+  return ret;
+}
+
 ObExprAIRerank::ObExprAIRerank(common::ObIAllocator &alloc)
 : ObFuncExprOperator(alloc, 
                     T_FUN_SYS_AI_RERANK, 
@@ -285,12 +346,18 @@ int ObExprAIRerank::sort_document_array_by_model_result(ObIAllocator &allocator,
       if (OB_ISNULL(model_result_obj)) {
         ret = OB_ERR_UNEXPECTED;
       } else {
-        ObJsonInt *index_value = static_cast<ObJsonInt *>(model_result_obj->get_value(INDEX_KEY));
-        ObJsonDouble *score_value = static_cast<ObJsonDouble *>(model_result_obj->get_value(SCORE_KEY));
-        if (OB_ISNULL(index_value) || OB_ISNULL(score_value)) {
+        ObJsonNode *index_node = model_result_obj->get_value(INDEX_KEY);
+        ObJsonNode *score_value = model_result_obj->get_value(SCORE_KEY);
+        int64_t index = 0;
+        double score = 0;
+        if (OB_FAIL(get_rerank_rank(index_node, index))) {
+        } else if (OB_FAIL(get_rerank_score(score_value, score))) {
+        } else if (index < 0 || index >= document_array->element_count()) {
+          // a rank outside the submitted documents cannot be mapped back
           ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("ai_rerank, model returned index out of range", K(ret), K(index),
+                   "documents", document_array->element_count());
         } else {
-          int64_t index = index_value->value();
           ObJsonObject *origin_obj = static_cast<ObJsonObject *>(document_array->get_value(index));
           ObJsonObject *new_obj = nullptr;
           if (OB_ISNULL(origin_obj)) {
@@ -385,21 +452,23 @@ int ObExprAIRerank::compact_json_array_by_key(ObIAllocator &allocator, ObJsonArr
   } else {
     int64_t count1 = array1->element_count();
     int64_t count2 = array2->element_count();
-    int64_t min_count = count1 < count2 ? count1 : count2;
     int64_t i = 0;
     int64_t j = 0;
-    while (i < min_count && j < min_count) {
+    // both sides are already sorted by score, so merge the whole pair instead of
+    // stopping at the shorter side: a batch that returns fewer documents than the
+    // accumulated result must not cut the taller side off
+    while (i < count1 && j < count2) {
       ObJsonObject *obj1 = static_cast<ObJsonObject *>(array1->get_value(i));
       ObJsonObject *obj2 = static_cast<ObJsonObject *>(array2->get_value(j));
       if (OB_ISNULL(obj1) || OB_ISNULL(obj2)) {
         ret = OB_ERR_UNEXPECTED;
       } else {
-        ObJsonDouble *double1 = static_cast<ObJsonDouble *>(obj1->get_value(score_key));
-        ObJsonDouble *double2 = static_cast<ObJsonDouble *>(obj2->get_value(score_key));
-        if (OB_ISNULL(double1) || OB_ISNULL(double2)) {
-          ret = OB_ERR_UNEXPECTED;
+        double score1 = 0;
+        double score2 = 0;
+        if (OB_FAIL(get_rerank_score(obj1->get_value(score_key), score1))) {
+        } else if (OB_FAIL(get_rerank_score(obj2->get_value(score_key), score2))) {
         } else {
-          if (double1->value() >= double2->value()) {
+          if (score1 >= score2) {
             // prefer the earlier batch on tie to keep the merge stable
             if (OB_FAIL(result_array->append(obj1))) {
             }
