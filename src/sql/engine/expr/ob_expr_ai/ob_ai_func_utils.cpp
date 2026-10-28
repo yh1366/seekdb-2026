@@ -326,7 +326,7 @@ int ObOllamaUtils::ObOllamaComplete::set_config_json_format(common::ObIAllocator
 
 int ObOllamaUtils::ObOllamaComplete::parse_output(common::ObIAllocator &allocator,
                                                   common::ObJsonObject *http_response,
-                                                  common::ObIJsonBase *&result) 
+                                                  common::ObIJsonBase *&result)
 {
   int ret = OB_SUCCESS;
   if (OB_ISNULL(http_response)) {
@@ -339,7 +339,17 @@ int ObOllamaUtils::ObOllamaComplete::parse_output(common::ObIAllocator &allocato
     if (OB_FAIL(j_path.parse_path())) {
     } else if (OB_FAIL(j_tree->seek(j_path, j_path.path_node_cnt(), false, false, hit))) {
     } else if (hit.size() == 0) {
-      ret = OB_ERR_UNEXPECTED;
+      // fallback: try OpenAI chat-completion format
+      ObString openai_path("$.choices[0].message.content");
+      ObJsonPath openai_j_path(openai_path, &allocator);
+      ObJsonSeekResult openai_hit;
+      if (OB_FAIL(openai_j_path.parse_path())) {
+      } else if (OB_FAIL(j_tree->seek(openai_j_path, openai_j_path.path_node_cnt(), false, false, openai_hit))) {
+      } else if (openai_hit.size() == 0) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+        result = openai_hit[0];
+      }
     } else {
       result = hit[0];
     }
@@ -385,7 +395,7 @@ int ObOllamaUtils::ObOllamaEmbed::get_body(common::ObIAllocator &allocator,
 
 int ObOllamaUtils::ObOllamaEmbed::parse_output(common::ObIAllocator &allocator,
                                                common::ObJsonObject *http_response,
-                                               common::ObIJsonBase *&result) 
+                                               common::ObIJsonBase *&result)
 {
   int ret = OB_SUCCESS;
   if (OB_ISNULL(http_response)) {
@@ -398,7 +408,32 @@ int ObOllamaUtils::ObOllamaEmbed::parse_output(common::ObIAllocator &allocator,
     if (OB_FAIL(j_path.parse_path())) {
     } else if (OB_FAIL(j_tree->seek(j_path, j_path.path_node_cnt(), false, false, hit))) {
     } else if (hit.size() == 0) {
-      ret = OB_ERR_UNEXPECTED;
+      // fallback: try OpenAI embedding format ($.data[*].embedding)
+      ObJsonNode *data_node = http_response->get_value("data");
+      if (OB_ISNULL(data_node) || data_node->json_type() != ObJsonNodeType::J_ARRAY) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+        ObJsonArray *data_array = static_cast<ObJsonArray *>(data_node);
+        ObJsonArray *wrapper = nullptr;
+        if (OB_FAIL(ObAIFuncJsonUtils::get_json_array(allocator, wrapper))) {
+        } else {
+          for (int64_t i = 0; OB_SUCC(ret) && i < data_array->element_count(); i++) {
+            ObJsonNode *item = data_array->get_value(i);
+            if (OB_ISNULL(item) || item->json_type() != ObJsonNodeType::J_OBJECT) {
+              ret = OB_ERR_UNEXPECTED;
+            } else {
+              ObJsonNode *emb = static_cast<ObJsonObject *>(item)->get_value("embedding");
+              if (OB_ISNULL(emb)) {
+                ret = OB_ERR_UNEXPECTED;
+              } else if (OB_FAIL(wrapper->append(emb))) {
+              }
+            }
+          }
+          if (OB_SUCC(ret)) {
+            result = wrapper;
+          }
+        }
+      }
     } else {
       result = hit[0];
     }
