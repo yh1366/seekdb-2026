@@ -52,17 +52,19 @@ int ObExprAIPrompt::calc_result_typeN(ObExprResType &type,
 {
   int ret = OB_SUCCESS;
   bool is_null_res = false;
+  // text/blob values are read through ObTextStringHelper at evaluation time, so
+  // the text type itself must be kept as the calc type to preserve the lob header
   ObExprResType template_type = types_stack[0];
-  if (!ob_is_string_tc(template_type.get_type())) {
+  if (!ob_is_string_type(template_type.get_type())) {
     ret = OB_ERR_INVALID_TYPE_FOR_OP;
   } else {
-    types_stack[0].set_calc_type(ObVarcharType);
+    types_stack[0].set_calc_type(template_type.get_type());
     types_stack[0].set_calc_collation_type(CS_TYPE_UTF8MB4_BIN);
   }
 
   for (int64_t i = 1; i < param_num && OB_SUCC(ret); i++) {
-    if (ob_is_string_tc(types_stack[i].get_type())) {
-      types_stack[i].set_calc_type(ObVarcharType);
+    if (ob_is_string_type(types_stack[i].get_type())) {
+      types_stack[i].set_calc_type(types_stack[i].get_type());
       types_stack[i].set_calc_collation_type(CS_TYPE_UTF8MB4_BIN);
     } else if (ob_is_json(types_stack[i].get_type())) {
       // json args are allowed and keep their structure in the prompt object
@@ -112,7 +114,7 @@ int ObExprAIPrompt::eval_ai_prompt(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &
       if (OB_FAIL(tmp_allocator.eval_arg(arg, ctx, datum))) {
       } else if (datum->is_null()) {
         ret = OB_ERR_INVALID_TYPE_FOR_OP;
-      } else if (ob_is_string_tc(arg->datum_meta_.type_)) {
+      } else if (ob_is_string_type(arg->datum_meta_.type_)) {
         if (OB_FAIL(ObTextStringHelper::read_real_string_data(
                 ctx.exec_ctx_, tmp_allocator, *datum, arg->datum_meta_,
                 arg->obj_meta_.has_lob_header(), arg_str))) {
