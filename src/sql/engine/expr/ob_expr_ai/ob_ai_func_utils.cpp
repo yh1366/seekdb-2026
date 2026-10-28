@@ -382,12 +382,9 @@ int ObOllamaUtils::ObOllamaEmbed::get_body(common::ObIAllocator &allocator,
     } else if (OB_FAIL(body_obj->add("model", model_str))) {
     } else if (OB_FAIL(ObAIFuncJsonUtils::transform_array_to_json_array(allocator, contents, input_array))) {
     } else if (OB_FAIL(body_obj->add("input", input_array))) {
+    } else if (OB_FAIL(ObAIFuncJsonUtils::compact_json_object(allocator, config, body_obj))) {
     } else {
       body = body_obj;
-    }
-    if (OB_SUCC(ret)) {
-      if (OB_FAIL(ObAIFuncJsonUtils::compact_json_object(allocator, config, body))) {
-      }
     }
   }
   return ret;
@@ -408,30 +405,31 @@ int ObOllamaUtils::ObOllamaEmbed::parse_output(common::ObIAllocator &allocator,
     if (OB_FAIL(j_path.parse_path())) {
     } else if (OB_FAIL(j_tree->seek(j_path, j_path.path_node_cnt(), false, false, hit))) {
     } else if (hit.size() == 0) {
-      // fallback: try OpenAI embedding format ($.data[*].embedding)
-      ObJsonNode *data_node = http_response->get_value("data");
-      if (OB_ISNULL(data_node) || data_node->json_type() != ObJsonNodeType::J_ARRAY) {
-        ret = OB_ERR_UNEXPECTED;
+      // fallback: mock server returns OpenAI embedding format
+      ObJsonArray *result_array = nullptr;
+      ObJsonNode *data_node = nullptr;
+      if (OB_FAIL(ObAIFuncJsonUtils::get_json_array(allocator, result_array))) {
+      } else if (OB_ISNULL(data_node = http_response->get_value("data"))) {
+        ret = OB_INVALID_DATA;
       } else {
         ObJsonArray *data_array = static_cast<ObJsonArray *>(data_node);
-        ObJsonArray *wrapper = nullptr;
-        if (OB_FAIL(ObAIFuncJsonUtils::get_json_array(allocator, wrapper))) {
-        } else {
-          for (int64_t i = 0; OB_SUCC(ret) && i < data_array->element_count(); i++) {
-            ObJsonNode *item = data_array->get_value(i);
-            if (OB_ISNULL(item) || item->json_type() != ObJsonNodeType::J_OBJECT) {
-              ret = OB_ERR_UNEXPECTED;
-            } else {
-              ObJsonNode *emb = static_cast<ObJsonObject *>(item)->get_value("embedding");
-              if (OB_ISNULL(emb)) {
-                ret = OB_ERR_UNEXPECTED;
-              } else if (OB_FAIL(wrapper->append(emb))) {
-              }
+        ObJsonNode *embedding_node = nullptr;
+        for (int64_t i = 0; OB_SUCC(ret) && i < data_array->element_count(); i++) {
+          if (OB_ISNULL(embedding_node = data_array->get_value(i))) {
+            ret = OB_INVALID_DATA;
+          } else if (embedding_node->json_type() != ObJsonNodeType::J_OBJECT) {
+            ret = OB_INVALID_DATA;
+          } else {
+            ObJsonObject *embedding_obj = static_cast<ObJsonObject *>(embedding_node);
+            ObJsonNode *embedding = embedding_obj->get_value("embedding");
+            if (OB_ISNULL(embedding)) {
+              ret = OB_INVALID_DATA;
+            } else if (OB_FAIL(result_array->append(embedding))) {
             }
           }
-          if (OB_SUCC(ret)) {
-            result = wrapper;
-          }
+        }
+        if (OB_SUCC(ret)) {
+          result = result_array;
         }
       }
     } else {
