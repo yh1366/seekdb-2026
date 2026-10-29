@@ -474,6 +474,9 @@ public:
 
   void set_has_temp_table_flag() { has_temp_table_flag_ = true; };
   bool get_has_temp_table_flag() const { return has_temp_table_flag_; };
+  // File SQL (read_csv / read_json / read_parquet / glob) is disabled by default
+  void set_file_sql_enabled(bool enabled) { enable_file_sql_ = enabled; }
+  bool is_file_sql_enabled() const { return enable_file_sql_; }
   void set_accessed_session_level_temp_table() { has_accessed_session_level_temp_table_ = true; }
   bool has_accessed_session_level_temp_table() const { return has_accessed_session_level_temp_table_; }
   // Clear temporary table
@@ -890,6 +893,7 @@ private:
   int64_t curr_trans_last_stmt_time_;
   int64_t sess_create_time_;  // session creation time, currently only used for temporary table cleanup judgment
   bool has_temp_table_flag_;  // Whether the session has created a temporary table
+  bool enable_file_sql_;  // Whether file SQL functions are enabled in this session
   bool has_accessed_session_level_temp_table_;  // Whether accessed Session temporary table
   // trigger.
   bool is_for_trigger_package_;
