@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX STORAGE_FTS
 
 #include "storage/fts/ob_beng_ft_parser.h"
+#include "lib/allocator/page_arena.h"
 #include "data_plane/fts/ob_fts_struct.h"
 
 using namespace oceanbase::common;
@@ -49,7 +50,7 @@ int ObBEngFTParser::get_next_token(
     }
   } else if (OB_ISNULL(token.ptr_) || OB_UNLIKELY(0 >= token.len_ || 0 >= token_freq)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_ISNULL(buf = static_cast<char *>(allocator_.alloc(token.len_)))) {
+  } else if (OB_ISNULL(buf = static_cast<char *>(token_alloc_->alloc(token.len_)))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
     MEMCPY(buf, token.ptr_, token.len_);
@@ -76,7 +77,7 @@ int ObBEngFTParser::init(ObFTParserParam *param)
     analysis_ctx_.cs_ = param->cs_;
     analysis_ctx_.filter_stopword_ = false;
     analysis_ctx_.need_grouping_ = false;
-    if (OB_FAIL(english_analyzer_.init(analysis_ctx_, *param->allocator_))) {
+    if (OB_FAIL(english_analyzer_.init(analysis_ctx_, allocator_))) {
     } else if (OB_FAIL(segment(doc_, token_stream_))) {
     } else if (OB_ISNULL(token_stream_)) {
       ret = OB_ERR_UNEXPECTED;
@@ -86,6 +87,31 @@ int ObBEngFTParser::init(ObFTParserParam *param)
   }
   if (OB_FAIL(ret) && OB_UNLIKELY(!is_inited_)) {
     reset();
+  }
+  return ret;
+}
+
+int ObBEngFTParser::prepare(ObFTParserParam *param, common::ObIAllocator *token_alloc)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(param) || OB_UNLIKELY(!param->is_valid())) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (OB_UNLIKELY(UINT32_MAX < param->ft_length_)) {
+    ret = OB_NOT_SUPPORTED;
+  } else {
+    // Point token copies at the recyclable per-document arena.
+    token_alloc_ = (OB_NOT_NULL(token_alloc) ? token_alloc : &allocator_);
+    if (IS_INIT && OB_NOT_NULL(token_stream_) && analysis_ctx_.cs_ == param->cs_) {
+      // Fast path: the analyzer pipeline is reusable; analyze() rebinds the
+      // tail token stream to the new document.
+      doc_.set_string(param->fulltext_, param->ft_length_);
+      if (OB_FAIL(segment(doc_, token_stream_))) {
+      }
+    } else {
+      reset();
+      if (OB_FAIL(init(param))) {
+      }
+    }
   }
   return ret;
 }
@@ -120,18 +146,49 @@ int ObBasicEnglishFTParserDesc::segment(
     ObITokenIterator *&iter) const
 {
   int ret = OB_SUCCESS;
-  ObBEngFTParser *parser = nullptr;
+  iter = nullptr;
   if (OB_ISNULL(param) || OB_ISNULL(param->fulltext_) || OB_UNLIKELY(!param->is_valid())) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_ISNULL(parser = OB_NEWx(ObBEngFTParser, param->allocator_, *(param->allocator_)))) {
-    ret = OB_ALLOCATE_MEMORY_FAILED;
-  } else if (OB_FAIL(parser->init(param))) {
   } else {
-    iter = parser;
+    // Reuse a thread-local parser: the analyzer pipeline is built once and
+    // analyze() rebinds it per document. Token copies live in a per-document
+    // arena recycled before each prepare().
+    struct OBengTLSParser
+    {
+      ObArenaAllocator alloc;
+      ObArenaAllocator doc_alloc;
+      ObBEngFTParser *parser;
+      OBengTLSParser()
+          : alloc(lib::ObMemAttr("BEngFTParserTLS")),
+            doc_alloc(lib::ObMemAttr("BEngDocTLS")),
+            parser(nullptr)
+      {}
+      ~OBengTLSParser()
+      {
+        if (OB_NOT_NULL(parser)) {
+          parser->~ObBEngFTParser();
+          alloc.free(parser);
+          parser = nullptr;
+        }
+      }
+    };
+    static thread_local OBengTLSParser tls;
+    if (OB_ISNULL(tls.parser)) {
+      if (OB_ISNULL(tls.parser = OB_NEWx(ObBEngFTParser, &tls.alloc, tls.alloc))) {
+        ret = OB_ALLOCATE_MEMORY_FAILED;
+      }
+    }
+    if (OB_SUCC(ret)) {
+      tls.doc_alloc.reset();
+      if (OB_FAIL(tls.parser->prepare(param, &tls.doc_alloc))) {
+      } else {
+        iter = tls.parser;
+      }
+    }
   }
 
-  if (OB_FAIL(ret)) {
-    OB_DELETEx(ObBEngFTParser, param->allocator_, parser);
+  if (OB_FAIL(ret) && OB_NOT_NULL(iter)) {
+    free_token_iter(param, iter);
   }
 
   return ret;
@@ -141,12 +198,9 @@ void ObBasicEnglishFTParserDesc::free_token_iter(
     ObFTParserParam *param,
     ObITokenIterator *&iter) const
 {
-  if (OB_NOT_NULL(iter)) {
-    abort_unless(nullptr != param);
-    abort_unless(nullptr != param->allocator_);
-    iter->~ObITokenIterator();
-    param->allocator_->free(iter);
-  }
+  // The iterator is the thread-local parser kept for reuse; nothing to free.
+  iter = nullptr;
+  UNUSED(param);
 }
 
 int ObBasicEnglishFTParserDesc::get_add_word_flag(ObAddWordFlag &flag) const

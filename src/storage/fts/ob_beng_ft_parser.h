@@ -35,6 +35,7 @@ public:
 public:
   explicit ObBEngFTParser(common::ObIAllocator &allocator)
     : allocator_(allocator),
+      token_alloc_(&allocator),
       analysis_ctx_(),
       english_analyzer_(),
       doc_(),
@@ -44,6 +45,12 @@ public:
   ~ObBEngFTParser() { reset(); }
 
   int init(ObFTParserParam *param);
+
+  // Reuse entry: keeps the analyzer pipeline alive across calls and only
+  // rebinds it to the new document. token_alloc (if provided) backs the
+  // per-document token copies and is recycled by the caller.
+  int prepare(ObFTParserParam *param, common::ObIAllocator *token_alloc);
+
   void reset();
   virtual int get_next_token(
       const char *&word,
@@ -58,6 +65,9 @@ private:
       share::ObITokenStream *&token_stream);
 private:
   common::ObIAllocator &allocator_;
+  // Allocator for per-document token copies; defaults to allocator_ and is
+  // redirected to a recyclable per-document arena in the reused parser.
+  common::ObIAllocator *token_alloc_;
   share::ObTextAnalysisCtx analysis_ctx_;
   share::ObEnglishTextAnalyzer english_analyzer_;
   common::ObDatum doc_;

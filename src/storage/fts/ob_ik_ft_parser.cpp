@@ -23,6 +23,7 @@
 #include "lib/oblog/ob_log_module.h"
 #include "lib/utility/ob_macro_utils.h"
 #include "lib/utility/utility.h"
+#include "lib/allocator/page_arena.h"
 #include "data_plane/fts/ob_fts_struct.h"
 #include "data_plane/fts/ob_fts_parser_helper.h"
 #include "storage/fts/dict/ob_ft_dict.h"
@@ -62,6 +63,62 @@ int ObIKFTParser::init(const ObFTParserParam &param)
     } else {
       is_inited_ = true;
     }
+  }
+
+  return ret;
+}
+
+int ObIKFTParser::prepare(const ObFTParserParam &param, ObIAllocator &doc_alloc)
+{
+  int ret = OB_SUCCESS;
+  ObCollationType coll = ObCollationType::CS_TYPE_INVALID;
+
+  if (OB_ISNULL(param.cs_) || OB_ISNULL(param.cs_->name)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (CS_TYPE_INVALID == (coll = ObCharset::collation_type(param.cs_->name))) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (!IS_INIT) {
+    // One-time build of dict views and segmenters; they do not depend on the
+    // document and are kept for the lifetime of the (thread-local) parser.
+    coll_type_ = CS_TYPE_INVALID;
+    if (OB_FAIL(init_dict(param))) {
+    } else if (OB_FAIL(init_segmenter(param))) {
+    } else if (OB_ISNULL(ctx_ = OB_NEWx(TokenizeContext,
+                                        &allocator_,
+                                        coll,
+                                        doc_alloc,
+                                        param.fulltext_,
+                                        param.ft_length_,
+                                        param.ik_param_.mode_ == ObFTIKParam::Mode::SMART))) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else if (OB_FAIL(ctx_->init())) {
+    }
+
+    if (OB_FAIL(ret)) {
+      if (OB_NOT_NULL(ctx_)) {
+        ctx_->~TokenizeContext();
+        allocator_.free(ctx_);
+        ctx_ = nullptr;
+      }
+      reset();
+    } else {
+      is_inited_ = true;
+    }
+  }
+
+  if (OB_FAIL(ret)) {
+    // already logged / nothing to do
+  } else if (OB_ISNULL(ctx_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(ctx_->reuse(coll,
+                                 param.fulltext_,
+                                 param.ft_length_,
+                                 param.ik_param_.mode_ == ObFTIKParam::Mode::SMART))) {
+  } else {
+    coll_type_ = coll;
+    // The token lists were just emptied, so the per-document arena can be
+    // recycled for the new document.
+    doc_alloc.reset();
   }
 
   return ret;
@@ -194,20 +251,60 @@ int ObIKFTParser::process_next_batch()
 int ObIKFTParserDesc::segment(ObFTParserParam *param, ObITokenIterator *&iter) const
 {
   int ret = OB_SUCCESS;
-  ObIKFTParser *parser = nullptr;
+  iter = nullptr;
   ObFTDictHub *hub = nullptr;
   if (OB_ISNULL(param) || OB_UNLIKELY(!param->is_valid())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(ObFTParseData::instance().get_dict_hub(hub))) {
-  } else if (OB_ISNULL(parser = OB_NEWx(ObIKFTParser, param->allocator_, *(param->allocator_), hub))) {
-    ret = OB_ALLOCATE_MEMORY_FAILED;
-  } else if (OB_FAIL(parser->init(*param))) {
   } else {
-    iter = parser;
+    // Reuse a thread-local parser across tokenize calls: rebuilding the dict
+    // views (global cache lookups per range), processors and context for every
+    // document dominates the latency of small documents. Per-document token
+    // memory lives in its own arena that prepare() recycles between calls.
+    struct ObIKTLSParser
+    {
+      ObArenaAllocator alloc;
+      ObArenaAllocator doc_alloc;
+      ObIKFTParser *parser;
+      ObFTDictHub *hub;
+      ObIKTLSParser()
+          : alloc(lib::ObMemAttr("IKFTParserTLS")),
+            doc_alloc(lib::ObMemAttr("IKParseDocTLS")),
+            parser(nullptr),
+            hub(nullptr)
+      {}
+      ~ObIKTLSParser()
+      {
+        if (OB_NOT_NULL(parser)) {
+          parser->~ObIKFTParser();
+          alloc.free(parser);
+          parser = nullptr;
+        }
+      }
+    };
+    static thread_local ObIKTLSParser tls;
+    if (OB_ISNULL(tls.parser) || tls.hub != hub) {
+      if (OB_NOT_NULL(tls.parser)) {
+        tls.parser->~ObIKFTParser();
+        tls.alloc.free(tls.parser);
+        tls.parser = nullptr;
+      }
+      if (OB_ISNULL(tls.parser = OB_NEWx(ObIKFTParser, &tls.alloc, tls.alloc, hub))) {
+        ret = OB_ALLOCATE_MEMORY_FAILED;
+      } else {
+        tls.hub = hub;
+      }
+    }
+    if (OB_SUCC(ret)) {
+      if (OB_FAIL(tls.parser->prepare(*param, tls.doc_alloc))) {
+      } else {
+        iter = tls.parser;
+      }
+    }
   }
 
-  if (OB_FAIL(ret)) {
-    OB_DELETEx(ObIKFTParser, param->allocator_, parser);
+  if (OB_FAIL(ret) && OB_NOT_NULL(iter)) {
+    free_token_iter(param, iter);
   }
 
   return ret;
@@ -216,8 +313,10 @@ int ObIKFTParserDesc::segment(ObFTParserParam *param, ObITokenIterator *&iter) c
 void ObIKFTParserDesc::free_token_iter(ObFTParserParam *param,
                                        ObITokenIterator *&iter) const
 {
-  iter->~ObITokenIterator();
-  param->allocator_->free(iter);
+  // The iterator is the thread-local parser kept for reuse across calls;
+  // nothing to destroy here.
+  iter = nullptr;
+  UNUSED(param);
 }
 
 

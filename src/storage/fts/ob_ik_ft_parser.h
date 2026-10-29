@@ -55,6 +55,11 @@ public:
 
   int init(const ObFTParserParam &param);
 
+  // Reuse entry: builds dicts/segmenters once, then only rebinds the context
+  // to the new document on subsequent calls. doc_alloc backs the per-document
+  // token memory and is recycled by prepare() itself.
+  int prepare(const ObFTParserParam &param, ObIAllocator &doc_alloc);
+
   int get_next_token(const char *&word,
                      int64_t &word_len,
                      int64_t &char_cnt,

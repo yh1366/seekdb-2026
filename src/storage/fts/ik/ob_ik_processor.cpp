@@ -65,6 +65,33 @@ int TokenizeContext::init()
   return ret;
 }
 
+int TokenizeContext::reuse(ObCollationType coll_type,
+                           const char *fulltext,
+                           int64_t fulltext_len,
+                           bool is_smart)
+{
+  int ret = OB_SUCCESS;
+
+  if (OB_ISNULL(fulltext) || fulltext_len <= 0) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    coll_type_ = coll_type;
+    fulltext_ = fulltext;
+    fulltext_len_ = fulltext_len;
+    is_smart_ = is_smart;
+    cursor_ = 0;
+    next_char_len_ = 0;
+    handle_size_ = 0;
+    // Release the previous document's token nodes (allocated from the
+    // per-document allocator) before the caller recycles that allocator.
+    result_list_.reset();
+    token_list_.reset();
+    if (OB_FAIL(prepare_next_char())) {
+    }
+  }
+  return ret;
+}
+
 int TokenizeContext::reset_resource()
 {
   handle_size_ = 0;
