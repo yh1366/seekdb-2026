@@ -330,22 +330,64 @@ int ObFTParseHelper::init(
     const common::ObString &parser_properties)
 {
   int ret = OB_SUCCESS;
+  ObFTParser parsed_name;
+  ObFTParserProperty parsed_property;
+  const ObIFTParserDesc *parser_desc = nullptr;
+  if (OB_FAIL(init_and_export(allocator,
+                              parser_name,
+                              parser_properties,
+                              parsed_name,
+                              parsed_property,
+                              parser_desc))) {
+  }
+  return ret;
+}
+
+int ObFTParseHelper::init_and_export(
+    common::ObIAllocator *allocator,
+    const common::ObString &parser_name,
+    const common::ObString &parser_properties,
+    ObFTParser &parser,
+    ObFTParserProperty &property,
+    const ObIFTParserDesc *&parser_desc)
+{
+  int ret = OB_SUCCESS;
+  parser_desc = nullptr;
   if (OB_UNLIKELY(is_inited_)) {
     ret = OB_INIT_TWICE;
   } else if (OB_ISNULL(allocator) || OB_UNLIKELY(parser_name.empty())) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_FAIL(parser_name_.parse_from_str(parser_name.ptr(), parser_name.length()))) {
-  } else if (OB_FAIL(parser_property_.parse_for_parser_helper(parser_name_, parser_properties))) {
-  } else if (OB_FAIL(parser_name_.get_desc(parser_desc_))) {
-  } else if (OB_ISNULL(parser_desc_)) {
+  } else if (OB_FAIL(parser.parse_from_str(parser_name.ptr(), parser_name.length()))) {
+  } else if (OB_FAIL(property.parse_for_parser_helper(parser, parser_properties))) {
+  } else if (OB_FAIL(parser.get_desc(parser_desc))) {
+  } else if (OB_ISNULL(parser_desc)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_FAIL(set_add_word_flag(*parser_desc_))) {
-  } else {
-    allocator_ = allocator;
-    is_inited_ = true;
+  } else if (OB_FAIL(init_prepared(allocator, parser, property, parser_desc))) {
   }
   if (OB_FAIL(ret) && OB_UNLIKELY(!is_inited_)) {
     reset();
+  }
+  return ret;
+}
+
+int ObFTParseHelper::init_prepared(
+    common::ObIAllocator *allocator,
+    const ObFTParser &parser,
+    const ObFTParserProperty &property,
+    const ObIFTParserDesc *parser_desc)
+{
+  int ret = OB_SUCCESS;
+  if (OB_UNLIKELY(is_inited_)) {
+    ret = OB_INIT_TWICE;
+  } else if (OB_ISNULL(allocator) || OB_ISNULL(parser_desc)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (OB_FAIL(set_add_word_flag(*parser_desc))) {
+  } else {
+    parser_name_ = parser;
+    parser_property_ = property;
+    parser_desc_ = parser_desc;
+    allocator_ = allocator;
+    is_inited_ = true;
   }
   return ret;
 }

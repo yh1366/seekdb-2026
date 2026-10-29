@@ -69,6 +69,10 @@ private:
   public:
     // for property and tmp json string
     mutable ObArenaAllocator allocator_;
+    // parser name / properties exactly as they come from the arguments, used
+    // as the cache key of the (expensive) parser name and property parsing.
+    ObString raw_parser_name_;
+    ObString raw_properties_;
     ObString parser_name_;
     ObString properties_;
     ObObjMeta meta_;
@@ -93,13 +97,12 @@ private:
                                      MultimodeAlloctor &mm_alloc,
                                      TokenizeParam &param);
 
-  static int tokenize_fulltext(const TokenizeParam &param,
+  static int tokenize_fulltext(TokenizeParam &param,
                                TokenizeParam::OUTPUT_MODE mode,
                                common::ObIAllocator &allocator,
                                ObIJsonBase *&result);
 
   static int construct_ft_parser_inner_name(const ObString &input_str, TokenizeParam &param);
-
 private:
   DISALLOW_COPY_AND_ASSIGN(ObExprTokenize);
 };

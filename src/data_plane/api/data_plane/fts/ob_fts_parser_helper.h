@@ -162,6 +162,31 @@ public:
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
   /**
+   * Same as init() but also hands back the parsed parser name / property so
+   * that hot path callers can cache them and skip the parsing next time.
+   *
+   * @param[out] parser,      parsed parser name with version
+   * @param[out] property,    parsed parser property
+   * @param[out] parser_desc, parser descriptor resolved from the name
+   */
+  int init_and_export(
+      common::ObIAllocator *allocator,
+      const common::ObString &parser_name,
+      const common::ObString &parser_properties,
+      ObFTParser &parser,
+      ObFTParserProperty &property,
+      const ObIFTParserDesc *&parser_desc);
+  /**
+   * Initialize the helper from already parsed name / property. The caller is
+   * responsible for keeping the referenced objects alive and unchanged during
+   * the whole lifetime of the helper.
+   */
+  int init_prepared(
+      common::ObIAllocator *allocator,
+      const ObFTParser &parser,
+      const ObFTParserProperty &property,
+      const ObIFTParserDesc *parser_desc);
+  /**
    * Split document into multiple words
    *
    * @param[in] type, collation type for fulltext
