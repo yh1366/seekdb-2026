@@ -304,9 +304,29 @@ int ObIKArbitrator::prepare(TokenizeContext &ctx)
 
   int cal_bucket_num = MAX(ctx.fulltext_len() / 100, 10);
   cal_bucket_num = MIN(cal_bucket_num, 100);
-  if (OB_FAIL(chains_.create(cal_bucket_num, ObMemAttr("IK ARBITRATE")))) {
+  if (chains_.created()) {
+    // reused across batches, buckets already allocated
+  } else if (OB_FAIL(chains_.create(cal_bucket_num, ObMemAttr("IK ARBITRATE")))) {
   }
   return ret;
+}
+
+void ObIKArbitrator::reset()
+{
+  for (hash::ObHashMap<int64_t, ObIKTokenChain *>::iterator iter = chains_.begin();
+       iter != chains_.end();
+       ++iter) {
+    ObIKTokenChain *chain = iter->second;
+    if (OB_NOT_NULL(chain)) {
+      chain->~ObIKTokenChain();
+      alloc_.free(chain);
+      iter->second = nullptr;
+    }
+  }
+  chains_.reuse();
+  // Release the arena blocks holding token chains/list nodes of this batch,
+  // the same cleanup the per-batch destructor used to do.
+  alloc_.reset();
 }
 
 ObIKArbitrator::ObIKArbitrator() : alloc_(lib::ObMemAttr("IK Arbitrator")) {}

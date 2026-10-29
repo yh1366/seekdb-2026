@@ -101,7 +101,13 @@ public:
 
   virtual ~ObIIKProcessor() {}
 
-  int process(TokenizeContext &ctx);
+  // The current char info (ch/char_len/type) is resolved once by the parser and
+  // passed through, instead of being re-fetched from the context by every
+  // processor for every character on the tokenize hot path.
+  int process(TokenizeContext &ctx,
+              const char *ch,
+              const uint8_t char_len,
+              const ObFTCharUtil::CharType type);
 
   virtual int do_process(TokenizeContext &ctx,
                          const char *ch,

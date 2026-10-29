@@ -38,6 +38,10 @@ public:
 
   int output_result(TokenizeContext &ctx);
 
+  // Free all token chains so the arbitrator can be reused for the next batch
+  // without re-creating the allocator and the offset hash map.
+  void reset();
+
 private:
   int prepare(TokenizeContext &ctx);
 
