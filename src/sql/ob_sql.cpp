@@ -188,8 +188,8 @@ int ObSql::stmt_query(const common::ObString &stmt, ObSqlCtx &context, ObResultS
   //1 check inited
   ObString file_sql_stmt;
   if (OB_FAIL(sanity_check(context))) {
-  } else if (OB_FAIL(ObFileSqlRewriter::rewrite(result.get_mem_pool(), stmt,
-                                                result.get_session(), file_sql_stmt))) {
+  } else if (OB_FAIL(filesql::ObFileSqlRewriter::rewrite(result.get_mem_pool(), stmt,
+                                                        result.get_session(), file_sql_stmt))) {
   } else if (OB_FAIL(handle_text_query(file_sql_stmt, context, result))) {
     if (OB_EAGAIN != ret) {
     }

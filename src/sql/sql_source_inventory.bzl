@@ -1,13 +1,39 @@
 """Generated source inventory for SQL."""
 
 SQL_UNITY_GROUPS = [
+    # The file SQL sources each keep their own translation unit: they define
+    # helpers with file-local linkage and must not share a unity file.
     struct(
-        name = "ob_sql_file_sql_0",
+        name = "ob_sql_file_sql_csv_0",
         language = "c++",
         srcs = [
             "src/sql/engine/file_sql/ob_file_sql_csv.cpp",
+        ],
+        generated_srcs = [],
+        external_srcs = [],
+    ),
+    struct(
+        name = "ob_sql_file_sql_jsonl_0",
+        language = "c++",
+        srcs = [
             "src/sql/engine/file_sql/ob_file_sql_jsonl.cpp",
+        ],
+        generated_srcs = [],
+        external_srcs = [],
+    ),
+    struct(
+        name = "ob_sql_file_sql_parquet_0",
+        language = "c++",
+        srcs = [
             "src/sql/engine/file_sql/ob_file_sql_parquet.cpp",
+        ],
+        generated_srcs = [],
+        external_srcs = [],
+    ),
+    struct(
+        name = "ob_sql_file_sql_rewriter_0",
+        language = "c++",
+        srcs = [
             "src/sql/engine/file_sql/ob_file_sql_rewriter.cpp",
         ],
         generated_srcs = [],

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "share/ob_errno.h"
+#include "share/system_variable/ob_sys_var_class_type.h"
 #include "sql/resolver/ob_resolver_utils.h"
 #include "sql/session/ob_sql_session_info.h"
 
@@ -611,12 +612,12 @@ int load_table(const CallInfo &call, const ArgSet &args, Table &table)
 int check_secure_path(ObSQLSessionInfo &session, const std::string &path)
 {
   int ret = OB_SUCCESS;
-  ObString secure_file_priv;
-  if (OB_FAIL(session.get_secure_file_priv(secure_file_priv))) {
+  common::ObString secure_file_priv;
+  if (OB_FAIL(session.get_sys_variable(share::SYS_VAR_SECURE_FILE_PRIV, secure_file_priv))) {
   } else if (secure_file_priv.empty()) {
     ret = OB_ERR_NO_PRIVILEGE;
   } else {
-    ObString path_str(static_cast<int32_t>(path.size()), const_cast<char *>(path.data()));
+    common::ObString path_str(static_cast<int32_t>(path.size()), const_cast<char *>(path.data()));
     ret = ObResolverUtils::check_secure_path(secure_file_priv, path_str);
   }
   return ret;
@@ -881,9 +882,14 @@ int rewrite_copy(const std::string &text, ObSQLSessionInfo &session, std::string
               ret = OB_FILE_ALREADY_EXIST;
             }
             if (OB_SUCC(ret)) {
-              out = "select * from (select ";
               if (names.empty()) {
                 ret = OB_ERR_PARSE_SQL;
+              } else {
+                // INTO OUTFILE must sit between the select list and FROM.
+                out = "select * into outfile ";
+                out += quote_literal(path);
+                out += " format (type='csv', field_delimiter=',', line_delimiter='\\n', "
+                       "escape='\\\\', field_optionally_enclosed_by='\"') from (select ";
               }
               for (size_t i = 0; OB_SUCC(ret) && i < names.size(); ++i) {
                 if (i > 0) {
@@ -896,10 +902,7 @@ int rewrite_copy(const std::string &text, ObSQLSessionInfo &session, std::string
               if (OB_SUCC(ret)) {
                 out += " union all select * from (";
                 out += rewritten_query;
-                out += ") __file_sql_copy_src) __file_sql_copy into outfile ";
-                out += quote_literal(path);
-                out += " format (type='csv', field_delimiter=',', line_delimiter='\\n', "
-                       "escape='\\\\', field_optionally_enclosed_by='\"')";
+                out += ") __file_sql_copy_src) __file_sql_copy";
               }
             }
           }
@@ -989,12 +992,14 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
         bool has_describe = starts_with_ci(trimmed, "describe")
                             || starts_with_ci(trimmed, "desc ");
         std::vector<CallInfo> calls;
-        if (has_copy || has_describe) {
-          find_calls(trimmed, calls);
-        }
-        if ((has_copy || has_describe) && calls.empty()) {
-          // not a file statement, keep the original text
-          result = text;
+        find_calls(trimmed, calls);
+        // Only statements that really touch a file function (or COPY) need the
+        // switch. A bare `select @@session.enable_file_sql` must keep working
+        // while the feature is still disabled.
+        const bool touches_file_sql = !calls.empty() || has_copy;
+        if (!touches_file_sql) {
+          // keep the @@session.enable_file_sql substitution, if any
+          result = substituted;
         } else if (!enabled) {
           ret = OB_NOT_SUPPORTED;
         } else if (has_copy) {
