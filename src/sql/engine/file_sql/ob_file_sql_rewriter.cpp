@@ -93,32 +93,6 @@ bool contains_ci(const std::string &text, const char *needle)
   return false;
 }
 
-std::string replaced_all_ci(const std::string &text, const char *needle, const std::string &with)
-{
-  std::string out;
-  size_t needle_len = ::strlen(needle);
-  if (0 == needle_len) {
-    return text;
-  }
-  out.reserve(text.size());
-  size_t i = 0;
-  while (i < text.size()) {
-    bool match = (i + needle_len <= text.size());
-    for (size_t j = 0; match && j < needle_len; ++j) {
-      match = (::tolower(static_cast<unsigned char>(text[i + j]))
-               == ::tolower(static_cast<unsigned char>(needle[j])));
-    }
-    if (match) {
-      out += with;
-      i += needle_len;
-    } else {
-      out.push_back(text[i]);
-      ++i;
-    }
-  }
-  return out;
-}
-
 std::string quote_ident(const std::string &name)
 {
   std::string out = "`";
@@ -790,26 +764,6 @@ int rewrite_calls(const std::string &text, ObSQLSessionInfo &session, std::strin
   return ret;
 }
 
-bool is_set_enable_stmt(const std::string &text, bool &enable)
-{
-  std::string lower = to_lower(text);
-  bool matched = false;
-  if (starts_with_ci(lower, "set")) {
-    size_t sql_pos = lower.find("enable_file_sql");
-    size_t eq_pos = (std::string::npos == sql_pos) ? std::string::npos
-                                                  : lower.find('=', sql_pos);
-    if (std::string::npos != eq_pos) {
-      std::string value = trim_copy(lower.substr(eq_pos + 1));
-      if (!value.empty() && (value[value.size() - 1] == ';')) {
-        value.erase(value.size() - 1);
-        value = trim_copy(value);
-      }
-      matched = parse_bool_text(value, enable);
-    }
-  }
-  return matched;
-}
-
 bool statement_is(const std::string &text, const char *keyword, size_t &rest_pos)
 {
   std::string trimmed = trim_copy(text);
@@ -969,7 +923,6 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
                              || contains_ci(text, "read_ndjson")
                              || contains_ci(text, "read_parquet")
                              || contains_ci(text, "glob(")
-                             || contains_ci(text, "enable_file_sql")
                              || starts_with_ci(trim_copy(text), "copy")
                              || starts_with_ci(trim_copy(text), "describe")
                              || starts_with_ci(trim_copy(text), "desc ");
@@ -977,16 +930,13 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       // leave ordinary statements untouched
     } else {
       std::string result;
-      bool enable = false;
-      if (is_set_enable_stmt(text, enable)) {
-        session.set_file_sql_enabled(enable);
-        result = "do 0";
-      } else {
-        bool enabled = session.is_file_sql_enabled();
-        std::string substituted = replaced_all_ci(text, "@@session.enable_file_sql",
-                                                  enabled ? "1" : "0");
-        substituted = replaced_all_ci(substituted, "@@enable_file_sql", enabled ? "1" : "0");
-        std::string trimmed = trim_copy(substituted);
+      bool enabled = false;
+      {
+        int tmp_ret = session.get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled);
+        enabled = (OB_SUCCESS == tmp_ret) && enabled;
+      }
+      {
+        std::string trimmed = trim_copy(text);
         bool handled_describe = false;
         bool has_copy = starts_with_ci(trimmed, "copy");
         bool has_describe = starts_with_ci(trimmed, "describe")
@@ -994,12 +944,11 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
         std::vector<CallInfo> calls;
         find_calls(trimmed, calls);
         // Only statements that really touch a file function (or COPY) need the
-        // switch. A bare `select @@session.enable_file_sql` must keep working
-        // while the feature is still disabled.
+        // switch. `select @@session.enable_file_sql` is a plain system
+        // variable now and flows through the native path untouched.
         const bool touches_file_sql = !calls.empty() || has_copy;
         if (!touches_file_sql) {
-          // keep the @@session.enable_file_sql substitution, if any
-          result = substituted;
+          result = text;
         } else if (!enabled) {
           ret = OB_NOT_SUPPORTED;
         } else if (has_copy) {
@@ -1011,7 +960,7 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
             result = text;
           }
         } else {
-          if (OB_FAIL(rewrite_calls(substituted, session, result))) {
+          if (OB_FAIL(rewrite_calls(trimmed, session, result))) {
           }
         }
       }
