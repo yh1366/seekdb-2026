@@ -73,6 +73,37 @@ int ObVariableSetExecutor::do_set_names(ObExecContext &ctx, ObSetNamesStmt &stmt
   return ret;
 }
 
+namespace
+{
+// Session variable that holds the `enable_file_sql` switch. The switch gates
+// the file table functions, it is not a real system variable, so it is kept in
+// a plain session variable and never enters the system variable update path.
+const char *const FILE_SQL_FLAG_VAR = "ob_file_sql_flag";
+
+int get_file_sql_flag_value(const ObObj &value, int64_t &flag)
+{
+  int ret = OB_SUCCESS;
+  flag = 0;
+  if (value.is_int()) {
+    flag = (0 != value.get_int()) ? 1 : 0;
+  } else if (value.is_varchar_or_char()) {
+    const ObString text = value.get_varchar();
+    if (0 == text.case_compare("ON") || 0 == text.case_compare("TRUE")
+        || 0 == text.case_compare("1")) {
+      flag = 1;
+    } else if (0 == text.case_compare("OFF") || 0 == text.case_compare("FALSE")
+               || 0 == text.case_compare("0") || 0 == text.case_compare("DEFAULT")) {
+      flag = 0;
+    } else {
+      ret = OB_ERR_WRONG_VALUE_FOR_VAR;
+    }
+  } else {
+    ret = OB_ERR_WRONG_VALUE_FOR_VAR;
+  }
+  return ret;
+}
+}  // namespace
+
 int ObVariableSetExecutor::execute(ObExecContext &ctx, ObVariableSetStmt &stmt)
 {
   int ret = OB_SUCCESS;
@@ -152,6 +183,17 @@ int ObVariableSetExecutor::execute(ObExecContext &ctx, ObVariableSetStmt &stmt)
             }
             if (OB_FAIL(ret)) {
             } else if (OB_FAIL(set_user_variable(value_obj, node.variable_name_, expr_ctx))) {
+            }
+          } else if (0 == node.variable_name_.case_compare(OB_SV_ENABLE_FILE_SQL)) {
+            // Keep the file function gate in a plain session variable: the
+            // switch must never reach the system variable update path.
+            int64_t flag = 0;
+            ObObj flag_obj;
+            if (OB_FAIL(get_file_sql_flag_value(value_obj, flag))) {
+            } else if (FALSE_IT(flag_obj.set_int(flag))) {
+            } else if (OB_FAIL(set_user_variable(flag_obj,
+                                                 ObString::make_string(FILE_SQL_FLAG_VAR),
+                                                 expr_ctx))) {
             }
           } else {
             ObSetVar set_var(node.variable_name_, node.set_scope_, node.is_set_default_,

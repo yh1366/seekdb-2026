@@ -157,7 +157,7 @@ bool is_ident_char(const char c);
 // Session variable that mirrors the `enable_file_sql` switch. The SET form is
 // rewritten into a plain assignment of this variable so that the statement does
 // not depend on the system variable update path.
-const char *const FILE_SQL_FLAG_VAR = "__ob_file_sql_flag";
+const char *const FILE_SQL_FLAG_VAR = "ob_file_sql_flag";
 
 bool user_flag_enabled(ObSQLSessionInfo &session)
 {
@@ -1070,8 +1070,8 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
         // The switch lives in a plain session variable: the system variable of
         // the same name is never written from here, so the statement cannot be
         // affected by the system variable update path at all.
-        const std::string noop = set_flag_enabled ? "set @__ob_file_sql_flag = 1"
-                                                  : "set @__ob_file_sql_flag = 0";
+        const std::string noop = set_flag_enabled ? "set @ob_file_sql_flag = 1"
+                                                  : "set @ob_file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
         if (NULL == buffer) {
           ret = OB_ALLOCATE_MEMORY_FAILED;
