@@ -192,8 +192,17 @@ int ObSql::stmt_query(const common::ObString &stmt, ObSqlCtx &context, ObResultS
   if (OB_FAIL(sanity_check(context))) {
   } else if (OB_FAIL(filesql::ObFileSqlRewriter::rewrite(result.get_mem_pool(), stmt,
                                                         result.get_session(), file_sql_stmt))) {
+    // The rewrite layer rejects a statement before it is ever parsed, so the
+    // "statement parsed, keep the connection" reset that the parser performs
+    // below never runs. `need_disconnect` is still the default true value set
+    // by ObMPQuery, which makes the observer drop the connection right after
+    // sending a perfectly normal error packet: the client then reports the
+    // error on the next statement as 2013 "Lost connection". A rejected
+    // statement is a user level error, never a protocol level one.
+    result.get_exec_context().set_need_disconnect(false);
   } else if (OB_FAIL(aicolumn::ObAiColumnRewriter::rewrite(result.get_mem_pool(), file_sql_stmt,
                                                           result.get_session(), ai_column_stmt))) {
+    result.get_exec_context().set_need_disconnect(false);
   } else if (OB_FAIL(handle_text_query(ai_column_stmt, context, result))) {
     if (OB_EAGAIN != ret) {
     }

@@ -344,6 +344,15 @@ std::string build_comment(const AiColumnDef &def)
     json += escape_json(def.options_);
     json += "\"";
   }
+  // Keep the original declaration around. The column comment is the only place
+  // where the metadata survives, and `SHOW CREATE TABLE` prints it, so the AI
+  // COLUMN clause stays visible to anything that inspects the schema.
+  json += ",\"def\":\"";
+  json += escape_json(def.prefix_ + " AI COLUMN (" + def.expr_ + ")");
+  if (!def.options_.empty()) {
+    json += escape_json(" WITH (" + def.options_ + ")");
+  }
+  json += "\"";
   json += "}";
   return json;
 }
