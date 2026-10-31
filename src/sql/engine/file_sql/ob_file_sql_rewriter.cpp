@@ -159,17 +159,6 @@ bool is_ident_char(const char c);
 // not depend on the system variable update path.
 const char *const FILE_SQL_FLAG_VAR = "ob_file_sql_flag";
 
-bool user_flag_enabled(ObSQLSessionInfo &session)
-{
-  bool enabled = false;
-  common::ObObj value;
-  const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
-  if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
-    enabled = (0 != value.get_int());
-  }
-  return enabled;
-}
-
 // Rewrites `@@[session.]enable_file_sql` into a read of the mirror variable so
 // that the value observed by SELECT always matches the rewritten SET form.
 bool rewrite_select_flag(const std::string &text, std::string &result)
@@ -1052,13 +1041,17 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
     std::string flag_read_result;
     bool set_flag_enabled = false;
     bool set_flag_bad_value = false;
-    bool mentions_file_sql = contains_ci(text, "read_csv") || contains_ci(text, "read_json")
-                             || contains_ci(text, "read_ndjson")
-                             || contains_ci(text, "read_parquet")
-                             || contains_ci(text, "glob(")
-                             || starts_with_ci(trim_copy(text), "copy")
-                             || starts_with_ci(trim_copy(text), "describe")
-                             || starts_with_ci(trim_copy(text), "desc ");
+    // A file function name (or COPY) is the only thing that requires the
+    // switch. A bare `desc t` is left alone so that ordinary statements are
+    // never affected.
+    const bool has_function = contains_ci(text, "read_csv") || contains_ci(text, "read_json")
+                              || contains_ci(text, "read_ndjson")
+                              || contains_ci(text, "read_parquet")
+                              || contains_ci(text, "glob(");
+    const bool has_copy_stmt = starts_with_ci(trim_copy(text), "copy");
+    const bool mentions_file_sql = has_function || has_copy_stmt
+                                   || starts_with_ci(trim_copy(text), "describe")
+                                   || starts_with_ci(trim_copy(text), "desc ");
     // `set session enable_file_sql = ...` does not mention any file function, so
     // it needs a dedicated branch. The switch is applied through the session
     // API and the statement itself is turned into a plain session variable
@@ -1067,9 +1060,9 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       if (set_flag_bad_value) {
         ret = OB_ERR_WRONG_VALUE_FOR_VAR;
       } else {
-        // The switch lives in a plain session variable: the system variable of
-        // the same name is never written from here, so the statement cannot be
-        // affected by the system variable update path at all.
+        // Plain boolean assignment: cannot fail, cannot reach the system
+        // variable store.
+        (void)session.set_file_sql_enable_flag(set_flag_enabled);
         const std::string noop = set_flag_enabled ? "set @ob_file_sql_flag = 1"
                                                   : "set @ob_file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
@@ -1091,19 +1084,17 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       // The switch is read from the session variable only: the system variable
       // of the same name is a pure mirror and is never touched, so neither the
       // SET nor the file function path can reach the system variable store.
-      const bool enabled = user_flag_enabled(session);
+      const bool enabled = session.is_file_sql_enabled();
       {
         std::string trimmed = trim_copy(text);
         bool handled_describe = false;
-        bool has_copy = starts_with_ci(trimmed, "copy");
+        bool has_copy = has_copy_stmt;
         bool has_describe = starts_with_ci(trimmed, "describe")
                             || starts_with_ci(trimmed, "desc ");
-        std::vector<CallInfo> calls;
-        find_calls(trimmed, calls);
-        // Only statements that really touch a file function (or COPY) need the
-        // switch. `select @@session.enable_file_sql` is a plain system
-        // variable now and flows through the native path untouched.
-        const bool touches_file_sql = !calls.empty() || has_copy;
+        // The switch is a plain boolean member of the session, and while it is
+        // off the statement is rejected before any parsing happens. This keeps
+        // the disabled path down to a couple of substring tests.
+        const bool touches_file_sql = has_function || has_copy;
         if (!touches_file_sql) {
           result = text;
         } else if (!enabled) {

@@ -878,10 +878,11 @@ public:
   int get_locale_name(common::ObString &str) const;
   int get_optimizer_cost_based_transformation(int64_t &cbqt_policy) const;
   int is_push_join_predicate_enabled(bool &push_join_predicate_enabled) const;
-  // File SQL switch. `set session enable_file_sql = ...` is applied through this
-  // dedicated entry point so that it does not depend on the generic system
-  // variable update path.
+  // File SQL switch. The flag is kept in a plain boolean member so that neither
+  // `set session enable_file_sql = ...` nor the file function gate touches the
+  // generic system variable store.
   int set_file_sql_enable_flag(const bool enabled);
+  bool is_file_sql_enabled() const { return enable_file_sql_; }
   /// @}
 
   ///@{ user variables related:
@@ -2006,6 +2007,9 @@ private:
   ObCollationType charset_client_;
   ObCollationType collation_connection_;
   ObCollationType collation_database_;
+  // Per session file SQL switch. Kept out of the system variable store on
+  // purpose: the generic update path is not involved at all.
+  bool enable_file_sql_ = false;
 };
 
 
