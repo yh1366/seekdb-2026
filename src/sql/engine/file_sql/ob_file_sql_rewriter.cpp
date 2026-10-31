@@ -93,6 +93,64 @@ bool contains_ci(const std::string &text, const char *needle)
   return false;
 }
 
+// Returns true when the statement is a ``set`` statement that assigns the
+// file_sql switch. The assigned value is decoded into ``enabled``. When the
+// value is not a valid boolean literal ``bad_value`` is set and the caller
+// reports a wrong value error.
+bool parse_set_file_sql_stmt(const std::string &raw, bool &enabled, bool &bad_value)
+{
+  const char *const VAR_NAME = "enable_file_sql";
+  const std::string trimmed = trim_copy(raw);
+  const std::string lower = to_lower(trimmed);
+  bool is_set_stmt = false;
+  if (starts_with_ci(trimmed, "set") && lower.size() > 3) {
+    const char sep = lower[3];
+    is_set_stmt = (' ' == sep || '\t' == sep || '\n' == sep || '\r' == sep || '@' == sep);
+  }
+  bool matched = false;
+  if (is_set_stmt) {
+    const size_t name_len = ::strlen(VAR_NAME);
+    const size_t pos = lower.find(VAR_NAME);
+    if (std::string::npos != pos) {
+      size_t p = pos + name_len;
+      while (p < lower.size() && isspace(static_cast<unsigned char>(lower[p]))) {
+        ++p;
+      }
+      if (p < lower.size() && ':' == lower[p]) {
+        ++p;
+      }
+      while (p < lower.size() && isspace(static_cast<unsigned char>(lower[p]))) {
+        ++p;
+      }
+      if (p < lower.size() && '=' == lower[p]) {
+        ++p;
+        size_t q = p;
+        while (q < lower.size() && ',' != lower[q] && ';' != lower[q]) {
+          ++q;
+        }
+        std::string value = trim_copy(lower.substr(p, q - p));
+        if (value.size() >= 2
+            && (('\'' == value[0] && '\'' == value[value.size() - 1])
+                || ('"' == value[0] && '"' == value[value.size() - 1]))) {
+          value = trim_copy(value.substr(1, value.size() - 2));
+        }
+        if ("on" == value || "true" == value || "1" == value) {
+          enabled = true;
+          matched = true;
+        } else if ("off" == value || "false" == value || "0" == value
+                   || "default" == value) {
+          enabled = false;
+          matched = true;
+        } else {
+          bad_value = true;
+          matched = true;
+        }
+      }
+    }
+  }
+  return matched;
+}
+
 std::string quote_ident(const std::string &name)
 {
   std::string out = "`";
@@ -919,6 +977,8 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
     // nothing to do
   } else {
     std::string text(stmt.ptr(), static_cast<size_t>(stmt.length()));
+    bool set_flag_enabled = false;
+    bool set_flag_bad_value = false;
     bool mentions_file_sql = contains_ci(text, "read_csv") || contains_ci(text, "read_json")
                              || contains_ci(text, "read_ndjson")
                              || contains_ci(text, "read_parquet")
@@ -926,7 +986,27 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
                              || starts_with_ci(trim_copy(text), "copy")
                              || starts_with_ci(trim_copy(text), "describe")
                              || starts_with_ci(trim_copy(text), "desc ");
-    if (!mentions_file_sql) {
+    // `set session enable_file_sql = ...` does not mention any file function, so
+    // it needs a dedicated branch. The switch is applied through the session
+    // API and the statement itself is turned into a plain session variable
+    // assignment, which keeps it on a well tested code path.
+    if (parse_set_file_sql_stmt(text, set_flag_enabled, set_flag_bad_value)) {
+      if (set_flag_bad_value) {
+        ret = OB_ERR_WRONG_VALUE_FOR_VAR;
+      } else if (OB_FAIL(session.set_file_sql_enable_flag(set_flag_enabled))) {
+      } else {
+        const std::string noop = set_flag_enabled ? "set @__ob_file_sql_flag = 1"
+                                                  : "set @__ob_file_sql_flag = 0";
+        char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
+        if (NULL == buffer) {
+          ret = OB_ALLOCATE_MEMORY_FAILED;
+        } else {
+          ::memcpy(buffer, noop.data(), noop.size());
+          buffer[noop.size()] = '\0';
+          rewritten.assign_ptr(buffer, static_cast<int32_t>(noop.size()));
+        }
+      }
+    } else if (!mentions_file_sql) {
       // leave ordinary statements untouched
     } else {
       std::string result;
