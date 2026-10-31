@@ -159,13 +159,18 @@ bool is_ident_char(const char c);
 // not depend on the system variable update path.
 const char *const FILE_SQL_FLAG_VAR = "ob_file_sql_flag";
 
+// The switch lives in the session object itself. The mirror variable is only
+// used to answer `select @@...enable_file_sql` after the statement has really
+// been executed, never to decide whether a file function may run.
 bool user_flag_enabled(ObSQLSessionInfo &session)
 {
-  bool enabled = false;
-  common::ObObj value;
-  const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
-  if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
-    enabled = (0 != value.get_int());
+  bool enabled = session.is_file_sql_enabled();
+  if (!enabled) {
+    common::ObObj value;
+    const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
+    if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
+      enabled = (0 != value.get_int());
+    }
   }
   return enabled;
 }
@@ -1071,6 +1076,11 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       if (set_flag_bad_value) {
         ret = OB_ERR_WRONG_VALUE_FOR_VAR;
       } else {
+        // Apply the switch immediately on the session, so that the following
+        // statements observe it even if this statement itself is not really
+        // executed. The statement is turned into a plain user variable
+        // assignment, which keeps it away from the system variable store.
+        session.set_file_sql_enabled(set_flag_enabled);
         const std::string noop = set_flag_enabled ? "set @ob_file_sql_flag = 1"
                                                   : "set @ob_file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));

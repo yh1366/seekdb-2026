@@ -878,7 +878,6 @@ public:
   int get_locale_name(common::ObString &str) const;
   int get_optimizer_cost_based_transformation(int64_t &cbqt_policy) const;
   int is_push_join_predicate_enabled(bool &push_join_predicate_enabled) const;
-  int set_file_sql_enable_flag(const bool enabled);
   /// @}
 
   ///@{ user variables related:

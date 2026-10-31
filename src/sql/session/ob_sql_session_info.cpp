@@ -118,6 +118,7 @@ ObSQLSessionInfo::ObSQLSessionInfo() :
       curr_trans_last_stmt_time_(0),
       sess_create_time_(0),
       has_temp_table_flag_(false),
+      enable_file_sql_(false),
       has_accessed_session_level_temp_table_(false),
       is_for_trigger_package_(false),
       trans_type_(transaction::ObTxClass::USER),
