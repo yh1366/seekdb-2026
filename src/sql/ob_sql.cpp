@@ -18,6 +18,7 @@
 #include "config_bridge.h"
 #include "sql/ob_sql.h"
 #include "sql/engine/file_sql/ob_file_sql_rewriter.h"
+#include "sql/engine/ai_column/ob_ai_column_rewriter.h"
 #include "lib/json/ob_json_print_utils.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "query/runtime/ob_query_runtime_environment.h"
@@ -187,10 +188,13 @@ int ObSql::stmt_query(const common::ObString &stmt, ObSqlCtx &context, ObResultS
   NG_TRACE(parse_begin);
   //1 check inited
   ObString file_sql_stmt;
+  ObString ai_column_stmt;
   if (OB_FAIL(sanity_check(context))) {
   } else if (OB_FAIL(filesql::ObFileSqlRewriter::rewrite(result.get_mem_pool(), stmt,
                                                         result.get_session(), file_sql_stmt))) {
-  } else if (OB_FAIL(handle_text_query(file_sql_stmt, context, result))) {
+  } else if (OB_FAIL(aicolumn::ObAiColumnRewriter::rewrite(result.get_mem_pool(), file_sql_stmt,
+                                                          result.get_session(), ai_column_stmt))) {
+  } else if (OB_FAIL(handle_text_query(ai_column_stmt, context, result))) {
     if (OB_EAGAIN != ret) {
     }
   }
