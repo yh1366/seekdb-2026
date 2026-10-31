@@ -1067,10 +1067,9 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       if (set_flag_bad_value) {
         ret = OB_ERR_WRONG_VALUE_FOR_VAR;
       } else {
-        // Best effort: the mirror system variable is not available on every
-        // build, and the switch is always recorded through the rewritten
-        // assignment below, so the statement itself never fails here.
-        (void)session.set_file_sql_enable_flag(set_flag_enabled);
+        // The switch lives in a plain session variable: the system variable of
+        // the same name is never written from here, so the statement cannot be
+        // affected by the system variable update path at all.
         const std::string noop = set_flag_enabled ? "set @__ob_file_sql_flag = 1"
                                                   : "set @__ob_file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
@@ -1089,16 +1088,10 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       // leave ordinary statements untouched
     } else {
       std::string result;
-      bool enabled = false;
-      {
-        int tmp_ret = session.get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled);
-        enabled = (OB_SUCCESS == tmp_ret) && enabled;
-      }
-      if (!enabled) {
-        // The rewritten SET form records the switch in a session variable, keep
-        // both sources in sync so either of them can enable the file functions.
-        enabled = user_flag_enabled(session);
-      }
+      // The switch is read from the session variable only: the system variable
+      // of the same name is a pure mirror and is never touched, so neither the
+      // SET nor the file function path can reach the system variable store.
+      const bool enabled = user_flag_enabled(session);
       {
         std::string trimmed = trim_copy(text);
         bool handled_describe = false;
