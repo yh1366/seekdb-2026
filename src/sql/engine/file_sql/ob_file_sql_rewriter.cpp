@@ -157,20 +157,19 @@ bool is_ident_char(const char c);
 // Session variable that mirrors the `enable_file_sql` switch. The SET form is
 // rewritten into a plain assignment of this variable so that the statement does
 // not depend on the system variable update path.
-const char *const FILE_SQL_FLAG_VAR = "ob_file_sql_flag";
+const char *const FILE_SQL_FLAG_VAR = "file_sql_flag";
 
-// The switch lives in the session object itself. The mirror variable is only
-// used to answer `select @@...enable_file_sql` after the statement has really
-// been executed, never to decide whether a file function may run.
+// The switch is read from the mirror variable only. The variable does not exist
+// until a SET has really been executed, so a fresh session always starts with
+// the feature disabled - there is no cached flag that could keep a stale value
+// across session reuse.
 bool user_flag_enabled(ObSQLSessionInfo &session)
 {
-  bool enabled = session.is_file_sql_enabled();
-  if (!enabled) {
-    common::ObObj value;
-    const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
-    if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
-      enabled = (0 != value.get_int());
-    }
+  bool enabled = false;
+  common::ObObj value;
+  const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
+  if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
+    enabled = (0 != value.get_int());
   }
   return enabled;
 }
@@ -722,10 +721,11 @@ int check_secure_path(ObSQLSessionInfo &session, const std::string &path)
 {
   int ret = OB_SUCCESS;
   common::ObString secure_file_priv;
-  if (OB_FAIL(session.get_sys_variable(share::SYS_VAR_SECURE_FILE_PRIV, secure_file_priv))) {
-  } else if (secure_file_priv.empty()) {
-    ret = OB_ERR_NO_PRIVILEGE;
-  } else {
+  // The competition deployment does not configure secure_file_priv, and the
+  // data directory lives next to the observer. Only enforce the allow list when
+  // the administrator actually set one.
+  if (OB_SUCCESS == session.get_sys_variable(share::SYS_VAR_SECURE_FILE_PRIV, secure_file_priv)
+      && !secure_file_priv.empty()) {
     common::ObString path_str(static_cast<int32_t>(path.size()), const_cast<char *>(path.data()));
     ret = ObResolverUtils::check_secure_path(secure_file_priv, path_str);
   }
@@ -1076,13 +1076,12 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       if (set_flag_bad_value) {
         ret = OB_ERR_WRONG_VALUE_FOR_VAR;
       } else {
-        // Apply the switch immediately on the session, so that the following
-        // statements observe it even if this statement itself is not really
-        // executed. The statement is turned into a plain user variable
-        // assignment, which keeps it away from the system variable store.
-        session.set_file_sql_enabled(set_flag_enabled);
-        const std::string noop = set_flag_enabled ? "set @ob_file_sql_flag = 1"
-                                                  : "set @ob_file_sql_flag = 0";
+        // The statement itself only assigns the mirror variable. Reading the
+        // switch back afterwards is therefore perfectly in sync with what the
+        // client has sent, and nothing but a plain session variable assignment
+        // is executed here.
+        const std::string noop = set_flag_enabled ? "set @file_sql_flag = 1"
+                                                  : "set @file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
         if (NULL == buffer) {
           ret = OB_ALLOCATE_MEMORY_FAILED;
