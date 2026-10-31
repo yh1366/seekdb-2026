@@ -270,10 +270,14 @@ std::string double_to_literal(double value)
   char buf[64];
   snprintf(buf, sizeof(buf), "%.17g", value);
   std::string text(buf);
-  if (std::string::npos == text.find('.') && std::string::npos == text.find('e')
-      && std::string::npos == text.find('E') && std::string::npos == text.find("inf")
-      && std::string::npos == text.find("nan")) {
-    text += "e0";  // force a floating point literal
+  // Always emit a real (double) literal. Without the "e0" suffix a value like
+  // 98.5 parses as DECIMAL(scale=1), which is not a real type: when the row
+  // literals are merged in a UNION the decimal branch then drags the result
+  // scale to a fixed value (e.g. printing 90 as "90.0"). A real literal keeps
+  // scale unknown, so the values print in their shortest form ("90", "98.5").
+  bool is_plain_number = (std::string::npos == text.find_first_of("eEinfaN"));
+  if (is_plain_number) {
+    text += "e0";
   }
   return text;
 }
