@@ -3036,11 +3036,20 @@ int ObBasicSessionInfo::get_ob_sparse_drop_ratio_search(uint64_t &ob_sparse_drop
 
 int ObBasicSessionInfo::set_file_sql_enable_flag(const bool enabled)
 {
-  // Nothing but a boolean member is touched. The system variable of the same
-  // name (if any) is never written, so this can never fail and never reaches
-  // the generic system variable update machinery.
-  enable_file_sql_ = enabled;
-  return OB_SUCCESS;
+  int ret = OB_SUCCESS;
+  ObBasicSysVar *sys_var = NULL;
+  int64_t store_idx = -1;
+  if (OB_FAIL(inner_get_sys_var(SYS_VAR_ENABLE_FILE_SQL, store_idx, sys_var))) {
+    LOG_WARN("fail to get enable_file_sql sys var", K(ret), K(enabled), K(store_idx));
+  } else if (OB_ISNULL(sys_var)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("enable_file_sql sys var is null", K(ret), K(store_idx));
+  } else {
+    ObObj value;
+    value.set_int(enabled ? 1 : 0);
+    sys_var->set_value(value);
+  }
+  return ret;
 }
 ////////////////////////////////////////////////////////////////
 int ObBasicSessionInfo::replace_user_variables(const ObSessionValMap &user_var_map)

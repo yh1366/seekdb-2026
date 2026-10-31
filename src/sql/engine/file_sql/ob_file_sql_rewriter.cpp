@@ -159,6 +159,17 @@ bool is_ident_char(const char c);
 // not depend on the system variable update path.
 const char *const FILE_SQL_FLAG_VAR = "ob_file_sql_flag";
 
+bool user_flag_enabled(ObSQLSessionInfo &session)
+{
+  bool enabled = false;
+  common::ObObj value;
+  const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
+  if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
+    enabled = (0 != value.get_int());
+  }
+  return enabled;
+}
+
 // Rewrites `@@[session.]enable_file_sql` into a read of the mirror variable so
 // that the value observed by SELECT always matches the rewritten SET form.
 bool rewrite_select_flag(const std::string &text, std::string &result)
@@ -1060,9 +1071,6 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       if (set_flag_bad_value) {
         ret = OB_ERR_WRONG_VALUE_FOR_VAR;
       } else {
-        // Plain boolean assignment: cannot fail, cannot reach the system
-        // variable store.
-        (void)session.set_file_sql_enable_flag(set_flag_enabled);
         const std::string noop = set_flag_enabled ? "set @ob_file_sql_flag = 1"
                                                   : "set @ob_file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
@@ -1084,7 +1092,7 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       // The switch is read from the session variable only: the system variable
       // of the same name is a pure mirror and is never touched, so neither the
       // SET nor the file function path can reach the system variable store.
-      const bool enabled = session.is_file_sql_enabled();
+      const bool enabled = user_flag_enabled(session);
       {
         std::string trimmed = trim_copy(text);
         bool handled_describe = false;

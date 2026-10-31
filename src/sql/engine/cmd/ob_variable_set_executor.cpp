@@ -194,11 +194,6 @@ int ObVariableSetExecutor::execute(ObExecContext &ctx, ObVariableSetStmt &stmt)
             } else if (OB_FAIL(set_user_variable(flag_obj,
                                                  ObString::make_string(FILE_SQL_FLAG_VAR),
                                                  expr_ctx))) {
-            } else if (OB_ISNULL(session)) {
-              ret = OB_ERR_UNEXPECTED;
-            } else {
-              // Plain boolean, cannot fail.
-              (void)session->set_file_sql_enable_flag(0 != flag);
             }
           } else {
             ObSetVar set_var(node.variable_name_, node.set_scope_, node.is_set_default_,

@@ -36,8 +36,6 @@ const char *const HIDDEN_PREFIX = "__ai_";
 const char *const STRICT_VAR_NAME = "ob_ai_column_strict_flag";
 const char *const STRICT_SYSVAR_NAME = "ai_column_strict_read";
 const int64_t MAX_SQL_TEXT_FOR_AI_COLUMN = 512 * 1024;
-// Column comments are capped server side; stay comfortably below the limit.
-const size_t MAX_AI_COLUMN_COMMENT_LEN = 3000;
 
 std::string to_lower(const std::string &text)
 {
@@ -347,13 +345,6 @@ std::string build_comment(const AiColumnDef &def)
     json += "\"";
   }
   json += "}";
-  // Column comments are bounded by the server side limit. Falling back to the
-  // bare marker keeps the definition itself in the metadata even when the
-  // expression is too long to be stored in the comment.
-  if (json.size() > MAX_AI_COLUMN_COMMENT_LEN) {
-    json = AI_COLUMN_COMMENT_PREFIX;
-    json += ",\"truncated\":1}";
-  }
   return json;
 }
 
