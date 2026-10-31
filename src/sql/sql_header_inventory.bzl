@@ -1,6 +1,7 @@
 """Native public/private header ownership for the SQL module."""
 
 SQL_PUBLIC_HEADER_ROOTS = [
+    "engine/ai_column/ob_ai_column_rewriter.h",
     "engine/file_sql/ob_file_sql_format.h",
     "engine/file_sql/ob_file_sql_rewriter.h",
     "code_generator/ob_expr_generator_impl.h",

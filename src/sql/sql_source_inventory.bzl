@@ -39,6 +39,17 @@ SQL_UNITY_GROUPS = [
         generated_srcs = [],
         external_srcs = [],
     ),
+    # The AI column rewriter keeps its own translation unit: it defines
+    # file-local helpers and must not share a unity file.
+    struct(
+        name = "ob_sql_ai_column_rewriter_0",
+        language = "c++",
+        srcs = [
+            "src/sql/engine/ai_column/ob_ai_column_rewriter.cpp",
+        ],
+        generated_srcs = [],
+        external_srcs = [],
+    ),
     struct(
         name = "ob_sql_code_generator_0",
         language = "c++",

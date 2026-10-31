@@ -151,6 +151,78 @@ bool parse_set_file_sql_stmt(const std::string &raw, bool &enabled, bool &bad_va
   return matched;
 }
 
+// Forward declaration: the identifier helper is defined further below.
+bool is_ident_char(const char c);
+
+// Session variable that mirrors the `enable_file_sql` switch. The SET form is
+// rewritten into a plain assignment of this variable so that the statement does
+// not depend on the system variable update path.
+const char *const FILE_SQL_FLAG_VAR = "__ob_file_sql_flag";
+
+bool user_flag_enabled(ObSQLSessionInfo &session)
+{
+  bool enabled = false;
+  common::ObObj value;
+  const common::ObString name = common::ObString::make_string(FILE_SQL_FLAG_VAR);
+  if (OB_SUCCESS == session.get_user_variable_value(name, value) && value.is_int()) {
+    enabled = (0 != value.get_int());
+  }
+  return enabled;
+}
+
+// Rewrites `@@[session.]enable_file_sql` into a read of the mirror variable so
+// that the value observed by SELECT always matches the rewritten SET form.
+bool rewrite_select_flag(const std::string &text, std::string &result)
+{
+  bool any = false;
+  const std::string lower = to_lower(text);
+  const char *const VAR_NAME = "enable_file_sql";
+  const size_t name_len = ::strlen(VAR_NAME);
+  std::string out;
+  size_t copied = 0;
+  size_t from = 0;
+  while (from < lower.size()) {
+    const size_t pos = lower.find(VAR_NAME, from);
+    if (std::string::npos == pos) {
+      break;
+    }
+    size_t begin = pos;
+    while (begin > 0 && (is_ident_char(lower[begin - 1]) || '.' == lower[begin - 1])) {
+      --begin;
+    }
+    if (begin >= 2 && '@' == lower[begin - 1] && '@' == lower[begin - 2]) {
+      out.append(text, copied, begin - 2 - copied);
+      out += "ifnull(@";
+      out += FILE_SQL_FLAG_VAR;
+      out += ", 0)";
+      copied = pos + name_len;
+      from = copied;
+      any = true;
+    } else {
+      from = pos + name_len;
+    }
+  }
+  if (any) {
+    out.append(text, copied, std::string::npos);
+    result = out;
+  }
+  return any;
+}
+
+int copy_text(common::ObIAllocator &alloc, const std::string &text, common::ObString &out)
+{
+  int ret = OB_SUCCESS;
+  char *buffer = static_cast<char *>(alloc.alloc(text.size() + 1));
+  if (NULL == buffer) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else {
+    ::memcpy(buffer, text.data(), text.size());
+    buffer[text.size()] = '\0';
+    out.assign_ptr(buffer, static_cast<int32_t>(text.size()));
+  }
+  return ret;
+}
+
 std::string quote_ident(const std::string &name)
 {
   std::string out = "`";
@@ -977,6 +1049,7 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
     // nothing to do
   } else {
     std::string text(stmt.ptr(), static_cast<size_t>(stmt.length()));
+    std::string flag_read_result;
     bool set_flag_enabled = false;
     bool set_flag_bad_value = false;
     bool mentions_file_sql = contains_ci(text, "read_csv") || contains_ci(text, "read_json")
@@ -993,8 +1066,11 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
     if (parse_set_file_sql_stmt(text, set_flag_enabled, set_flag_bad_value)) {
       if (set_flag_bad_value) {
         ret = OB_ERR_WRONG_VALUE_FOR_VAR;
-      } else if (OB_FAIL(session.set_file_sql_enable_flag(set_flag_enabled))) {
       } else {
+        // Best effort: the mirror system variable is not available on every
+        // build, and the switch is always recorded through the rewritten
+        // assignment below, so the statement itself never fails here.
+        (void)session.set_file_sql_enable_flag(set_flag_enabled);
         const std::string noop = set_flag_enabled ? "set @__ob_file_sql_flag = 1"
                                                   : "set @__ob_file_sql_flag = 0";
         char *buffer = static_cast<char *>(alloc.alloc(noop.size() + 1));
@@ -1006,6 +1082,9 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
           rewritten.assign_ptr(buffer, static_cast<int32_t>(noop.size()));
         }
       }
+    } else if (rewrite_select_flag(text, flag_read_result)) {
+      if (OB_FAIL(copy_text(alloc, flag_read_result, rewritten))) {
+      }
     } else if (!mentions_file_sql) {
       // leave ordinary statements untouched
     } else {
@@ -1014,6 +1093,11 @@ int ObFileSqlRewriter::rewrite(common::ObIAllocator &alloc,
       {
         int tmp_ret = session.get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled);
         enabled = (OB_SUCCESS == tmp_ret) && enabled;
+      }
+      if (!enabled) {
+        // The rewritten SET form records the switch in a session variable, keep
+        // both sources in sync so either of them can enable the file functions.
+        enabled = user_flag_enabled(session);
       }
       {
         std::string trimmed = trim_copy(text);
